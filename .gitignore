@@ -1,0 +1,9 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.zip
+en_US_blogs.txt
+en_US_news.txt
+en_US_twitter.txt
+data/
