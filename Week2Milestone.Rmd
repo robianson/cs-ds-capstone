@@ -1,0 +1,145 @@
+---
+title: "Capstone - Milestone Report"
+author: "Ian Robinson"
+date: "10/5/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Overview
+We are on a journey to create a predictive text algorithm based on a corpus of three samples of text data. In this milestone report, we will take the first step on this journey. We will load and perform preliminary analysis on our data set, which we have already downloaded and unzipped into our working directory from this link: https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip.
+
+We will be working with the US English data files, in the directory data/en-US. The directory contains three large text samples, derived from blogs, news articles, and a sampling of tweets. 
+
+## Libraries
+```{r echo=FALSE}
+suppressPackageStartupMessages(library(stringi))
+suppressPackageStartupMessages(library(stringr))
+suppressPackageStartupMessages(library(tm))
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(tidytext))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(readr))
+```
+
+## 1. Load the Data
+
+
+```{r loadData}
+#news.con <- file('en_US_news.txt','rb')
+news <- read_lines('en_US_news.txt')#,encoding = 'UTF-8',open='rb')
+#blog.con <- file('en_US_blogs.txt','rb')
+blog <- read_lines('en_US_blogs.txt')#,encoding='UTF-8')
+#twit.con <- file('en_US_twitter.txt','rb')
+twitter <- read_lines('en_US_twitter.txt')#,encoding='UTF-8')
+#closeAllConnections()
+```
+
+## 2. Examine the data sets
+We'll check how many lines and characters each data set has and and how much memory each data set requires. 
+
+``` {r}
+stri_stats_general(blog)
+object.size(blog)
+stri_stats_general(news)
+object.size(news)
+stri_stats_general(twitter)
+object.size(twitter)
+```
+
+Our text samples have millions of lines. As a result, we'll need to take a sampling of each file and use that to conduct some representative statistical analysis. 
+
+## 3. Create Samples 
+Here we'll create samples based on a random selection of lines. We'll take 1% of each sample. To save memory, we'll remove the full samples once we've done this. 
+
+``` {r}
+set.seed(500)
+blogsamp <- blog[rbinom(length(blog),1,.01)==1]
+newssamp <- news[rbinom(length(news),1,.01)==1]
+twitsamp <- twitter[rbinom(length(twitter),1,.01)==1]
+rm(list=c('blog','news','twitter'))
+```
+
+## 4. View Samples
+``` {r}
+head(blogsamp,3)
+head(newssamp,3)
+head(twitsamp,3)
+```
+
+## 5. Preprocess Data
+To process the data into a form suitable for analysis, we'll use tidy principles and the tidytext library. We'll filter twitter  handles, hashtages, email addresses, and punctuation from the data, then we'll add our three samples into one corpus object. Finally, we'll process the corpus to remove numbers, strip whitespace, convert everything to lowercase, divide longer strings into individual words, and ensure only alphanumeric characters are represented.
+
+```{r}
+#combine data into data fram of text and source:
+alldata <- full_join(data.frame(text=blogsamp,source="blog"),data.frame(text=newssamp,source='news'))
+alldata <- alldata %>% full_join(data.frame(text=twitsamp,source='twitter'))
+
+# Remove emails, twitter handles, and hashtags, and replace punctuation characters with spaces
+
+fdata <- alldata %>% mutate(text=gsub('[@][a-zA-Z0-9_]{1,15}','',text)) %>% #twitter handles
+  mutate(text = gsub('#\\b[A-Za-z0-9._-]*\\b','',text)) %>% #hashtags
+  mutate(text=gsub('\\b[A-Za-z0-9._-]*[@](.*?)[.].{1,3}\\b','',text)) %>% #email addresses
+  mutate(text=gsub('<U+.{4}>','',text)) %>% #emoji'
+  mutate(text=gsub('[^0-9A-Za-z\' ]','',text)) %>% #anything not alphanumeric or ' or spaces
+  mutate(text=removeNumbers(text)) %>% #remove numbers
+  mutate(doc_id = row_number()) #keep unique document identifiers
+
+#now we'll split our data set into three tidy tables of unigrams, bigrams, and trigrams:
+tidywords <- fdata %>% unnest_tokens(word,text)
+tidybis <- fdata %>% unnest_tokens(bigram,text,token='ngrams',n=2)
+tidytris <- fdata %>% unnest_tokens(trigram,text,token='ngrams',n=3)
+
+```
+
+
+## 6. Preliminary Analysis
+At last, we're ready to do some analysis. We'll start with some analysis of individual words.
+``` {r}
+wordfreq <-  tidywords %>% count(word,sort=TRUE)
+numwords <- dim(wordfreq)[1]
+
+g <-   ggplot(head(filter(wordfreq,!word %in% get_stopwords()$word),25), 
+              aes(x = reorder(word,n), y = n)) +
+        geom_bar(stat = "identity", fill="darkseagreen2", colour="black") +
+        xlab("Word") + ylab("Count") + 
+        ggtitle("Top 25 Unigrams by Word Frequency (excl. Stop Words)") +
+        theme(plot.title = element_text(lineheight=.8, face="bold")) + coord_flip()
+
+print(g)
+
+```
+The sample dataset has `{r numwords} unique words, of which `{r sum(wordfreq$n==1)} appear only once. The 20 most popular words (excluding very commonly used words) are presented in the bar chart above. 
+
+### Histogram
+Let's take a look at a histogram of word frequencies. In this case we've taken the log of the frequencies to avoid skewing the histogram too far to the left. 
+``` {r}
+hist(log(wordfreq$n))
+```
+
+### Dictionary Coverage
+Let's look at the dictionary coverage. First we'll calculate what percentage of words in the total corpus are covered by a dictionary of each word size.
+``` {r cache=TRUE}
+coverage = rep(0,numwords)
+nwords=sum(wordfreq$n)
+
+for (i in 1:numwords){
+  coverage[i] = sum(wordfreq$n[1:i])/nwords
+}
+wordfreq <- mutate(wordfreq,coverage=coverage)
+```
+
+Now let's plot it:
+
+``` {r}
+seventyfive= sum(wordfreq$coverage<.75)+1
+ninety=sum(wordfreq$coverage <.9)+1
+g2 <- qplot(y=coverage,data=wordfreq) +geom_vline(xintercept = seventyfive)+geom_text(aes(x=seventyfive,label=paste('75% coverage @ ',seventyfive,' words'),y=.4),angle=90,vjust=1)+geom_vline(xintercept = ninety) + geom_text(aes(x=ninety,label=paste('90% coverage @ ',ninety,' words'),y=.4),angle=90,vjust=1)    +     xlab("# Words") + ylab("% Coverage") + 
+        ggtitle("Dictionary Coverage Chart")
+print(g2)
+
+```
